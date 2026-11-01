@@ -150,4 +150,41 @@ Casos de prueba diseñados a partir de los criterios de aceptación:
 | EXT-13 | Lista actualizada después de extender | La extensión responde correctamente y las consultas posteriores funcionan. | Envío de extensión desde la interfaz. | La interfaz informa éxito y refresca la lista de reservaciones y las vistas afectadas. | Frontend |
 | EXT-14 | Error de extensión informado en la interfaz | El endpoint responde `400`, `404` o `409`, o falla la solicitud. | Envío de una extensión rechazada. | La interfaz informa el rechazo; no muestra éxito ni afirma que la lista fue actualizada. | Frontend |
 
-Al terminar, registra para cada caso el comando ejecutado, el resultado real y cualquier problema encontrado. Las pruebas existentes deben seguir pasando durante el trabajo.
+### Evidencia funcional con Insomnia
+
+Inicia MongoDB y ParkHub (`docker compose up -d`, `npm run seed` y `npm run dev`). En Insomnia crea un entorno con `base_url` igual a `http://localhost:3000`. Las fechas de ejemplo están en 2099 para que sigan siendo futuras; conserva esos valores durante la secuencia para que la reservación esté vigente.
+
+#### Preparar los datos
+
+1. Envía `GET {{ base_url }}/api/spots` y copia el `id` de un espacio activo.
+2. Crea la reservación que se va a extender con `POST {{ base_url }}/api/reservations`, encabezado `Content-Type: application/json` y este cuerpo (reemplaza `ID_ESPACIO`):
+
+   ```json
+   {
+     "parkingSpotId": "ID_ESPACIO",
+     "startTime": "2099-10-13T10:00:00.000Z",
+     "endTime": "2099-10-13T11:00:00.000Z"
+   }
+   ```
+
+   Guarda el `_id` de la respuesta como `reservation_id`. En los siguientes pasos, sustituye `ID_RESERVACION` con ese valor.
+
+#### Solicitudes de prueba
+
+| Caso | Método y URL | Cuerpo | Resultado esperado |
+|---|---|---|---|
+| Extensión exitosa | `PATCH {{ base_url }}/api/reservations/ID_RESERVACION/extend` | `{"endTime":"2099-10-13T12:00:00.000Z"}` | `200`; la respuesta contiene la reservación con `endTime` igual a `2099-10-13T12:00:00.000Z`. |
+| Fecha inválida | `PATCH {{ base_url }}/api/reservations/ID_RESERVACION/extend` | `{"endTime":"no-es-una-fecha"}` | `400`; el horario no cambia. |
+| No encontrado | `PATCH {{ base_url }}/api/reservations/invalid-id/extend` | `{"endTime":"2099-10-13T13:00:00.000Z"}` | `404`. |
+| Hora final igual a la actual | `PATCH {{ base_url }}/api/reservations/ID_RESERVACION/extend` | `{"endTime":"2099-10-13T12:00:00.000Z"}` | `409`; el horario no cambia. |
+| Conflicto activo | Primero crea otra reservación `ACTIVE` en el mismo espacio de `2099-10-13T12:30:00.000Z` a `2099-10-13T13:30:00.000Z` con `POST /api/reservations`. Después extiende la original. | `{"endTime":"2099-10-13T13:00:00.000Z"}` | `409`; la reservación original conserva su hora final. |
+| Reservación cancelada no bloquea | Cancela la reservación de conflicto con `PATCH {{ base_url }}/api/reservations/ID_CONFLICTO/cancel`. Vuelve a extender la original. | `{"endTime":"2099-10-13T13:00:00.000Z"}` | `200`; el horario cancelado no impide la extensión. |
+| Horarios adyacentes | Usa un conjunto nuevo: crea una reservación original de `10:00` a `11:00` y otra activa del mismo espacio de `12:00` a `13:00`. Extiende la original hasta las `12:00`. | `{"endTime":"2099-10-13T12:00:00.000Z"}` | `200`; terminar cuando comienza la otra reservación no es conflicto. |
+
+Para cada solicitud `PATCH`, selecciona el método `PATCH`, configura `Body` como JSON y usa `Content-Type: application/json`. Los cuerpos indicados son el objeto JSON completo. Los casos de conflicto y adyacencia requieren reservaciones de preparación diferentes; si se reutiliza el mismo conjunto, limpia o cancela las reservaciones de prueba antes de continuar.
+
+<!-- CAPTURA: Insomnia mostrando el PATCH exitoso, el estado 200 y el endTime actualizado. -->
+<!-- CAPTURA: Insomnia mostrando el rechazo por fecha inválida (400) o ID no encontrado (404). -->
+<!-- CAPTURA: Insomnia mostrando el conflicto (409) y, en una ejecución aparte, el caso adyacente exitoso (200). -->
+
+Registra el estado HTTP y el resultado real de cada solicitud. Las pruebas de Insomnia comprueban el contrato HTTP manualmente; la suite Jest verifica de forma automatizada las reglas y el servicio.
